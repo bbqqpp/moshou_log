@@ -50,6 +50,14 @@ uvicorn app.main:app --reload --port 8001
 curl http://127.0.0.1:8001/api/health
 ```
 
+### 1.1 获取 WCL V1 密钥
+
+- 登录 `https://www.warcraftlogs.com`
+- 打开右上角账户菜单中的 `Settings`，或直接访问 `https://www.warcraftlogs.com/accounts/changeuser`
+- 页面底部的 `Public key` 就是 `WCL_V1_API_KEY`
+
+`WCL_V1_CLIENT_NAME` 不是 WCL 下发的固定密钥，而是这个应用的标记名称，V1 请求实际只使用 `api_key`；填任意可识别名字即可，例如 `moshou_log`。
+
 ### 2. 前端开发模式
 
 新开一个终端：
