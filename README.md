@@ -27,7 +27,9 @@
 - `frontend/`：React 单页应用
 - `backend/.env.example`：配置模板
 
-## 启动后端
+## 启动方式
+
+### 1. 配置并启动后端
 
 ```bash
 cd backend
@@ -35,15 +37,22 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env，至少填写 DEEPSEEK_API_KEY
+# 编辑 .env，至少填写：
+#   WCL_V1_API_KEY
+#   WCL_V1_CLIENT_NAME
+#   DEEPSEEK_API_KEY
 uvicorn app.main:app --reload --port 8001
 ```
 
-浏览器打开 `http://localhost:8001`。
+后端默认监听 `http://127.0.0.1:8001`，健康检查：
 
-后端会自动托管 `frontend/dist`。由于已经生成过 `dist`，只需启动后端即可访问完整页面；前端代码变更后需要重新 `npm run build`。
+```bash
+curl http://127.0.0.1:8001/api/health
+```
 
-## 前端开发模式
+### 2. 前端开发模式
+
+新开一个终端：
 
 ```bash
 cd frontend
@@ -51,7 +60,27 @@ npm install
 npm run dev
 ```
 
-开发模式访问 `http://localhost:5173`，Vite 会代理 `/api`。
+开发访问 `http://localhost:5173`。Vite 会把 `/api` 代理到 `http://127.0.0.1:8001`。
+
+首次打开页面时，需要输入公会名 `圣光的祝福` 登录。
+
+### 3. 生产模式
+
+先构建前端：
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+再启动后端；后端会自动托管 `frontend/dist`，所以直接访问：
+
+```text
+http://localhost:8001
+```
+
+修改前端代码后应重新执行 `npm run build`。
 
 ## 支持的链接格式
 
