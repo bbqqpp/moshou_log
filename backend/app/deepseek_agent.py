@@ -9,7 +9,7 @@ from .config import settings
 from .prompt import _sanitize, _light_fight, SYSTEM_PROMPT
 from .wcl_data_store import WCLDataStore
 
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 20
 
 TOOLS = [
     {
