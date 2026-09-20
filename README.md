@@ -7,17 +7,30 @@
 - 前端：React + Vite
 - 后端：FastAPI + HTTPX
 - AI：DeepSeek `chat/completions` 接口
-- WCL：V1 REST `fights` + 7 个 `tables` 视图（Client Key）
+- WCL：V1 REST `fights` + 10 个 `tables` 视图 + 8 条过滤事件流（Client Key）
+- 集成：MCP server（`mcp_server/`）+ 两个 Claude Code skill（`.claude/skills/`）
 
-## 当前拉取的 WCL tables
+## 当前拉取的 WCL 数据
+
+10 张聚合表：
 
 - `damage-done`：伤害排名
 - `healing`：治疗排名
 - `damage-taken`：承伤排名
 - `deaths`：玩家死亡数据
-- `buffs`：玩家 Buff 数据
-- `debuffs`：玩家 Debuff 数据
+- `buffs` / `debuffs`：玩家 Buff / Debuff 数据
 - `casts`：玩家施法时间轴
+- `interrupts` / `dispels` / `summons`：打断 / 驱散 / 召唤
+
+8 条过滤事件流（比聚合表细，用于复盘机制处理）：
+
+- `buff_debuff_events`：光环的施加与移除
+- `cast_events`：施法起手与完成（`begincast` / `cast`）
+- `death_events`：每个死亡点前后 ±15s/-3s 窗口内的伤害事件
+- `interrupt_events` / `dispel_events`：打断 / 驱散明细
+- `resource_events`：资源变化（用于重建资源曲线）
+- `combatant_info_events`：客户端上报的专精 ID（比解析职业名可靠）
+- `spawn_events`：召唤物
 
 ## 目录结构
 
@@ -25,8 +38,11 @@
 - `backend/storage/analysis_cache/`：本地分析报告缓存，按 `report_code + fight_id` 存储
 - `backend/storage/wcl_data/`：本地完整 WCL tables 数据，供 DeepSeek Tool Call 按需查询
 - `backend/storage/player_reports/`：玩家报告（单人 / 双人对比）
+- `backend/storage/boss_guides/`：本地 BOSS 攻略数据（阶段、机制、常见灭团点、检查清单）
 - `backend/scripts/backfill_report_meta.py`：一次性回填脚本，把 Boss 元数据补进旧缓存
 - `frontend/`：React 单页应用
+- `mcp_server/`：MCP server，把取数、查询、深度分析和 DeepSeek 复盘暴露成 MCP 工具
+- `.claude/skills/`：两个 Claude Code skill —— 单场复盘与技能循环对比
 - `backend/.env.example`：配置模板
 
 ## 启动方式
@@ -40,6 +56,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env，至少填写：
+#   ALLOWED_GUILD_NAME   ← 登录口令，不填则任何人都登录不进来
 #   WCL_V1_API_KEY
 #   WCL_V1_CLIENT_NAME
 #   DEEPSEEK_API_KEY
@@ -95,23 +112,24 @@ http://localhost:8001
 
 ## 支持的链接格式
 
-仅支持正式服公开日志，并且必须包含精确的战斗 ID：
+仅支持正式服公开日志。这几种都支持：
 
 ```text
 https://www.warcraftlogs.com/reports/REPORT_CODE#fight=12&type=damage-done
+https://cn.warcraftlogs.com/reports/REPORT_CODE#fight=12
+https://www.archon.gg/wow/reports/REPORT_CODE/fights/12/raid
 ```
 
-也支持：
+`archon.gg` 是 WCL 的第三方前端，战斗 ID 在**路径**里而不是 fragment。
 
-```text
-https://cn.warcraftlogs.com/reports/REPORT_CODE#fight=12&type=damage-done
-```
+`#fight=last` 也支持，会解析成该 report 的**最后一场 Boss 战**。`last` 是 WCL 前端的语法糖、
+V1 API 不认，所以后端要多调一次 `fights` 接口去解析；解析结果会写在返回的 `warnings` 里
+（WCL 的 Boss 标记并不总是准，`last` 落到的未必是你刚打的那一场）。
 
 不支持：
 
 - `classic.warcraftlogs.com`
-- `#fight=last`
-- 只到 `reports/REPORT_CODE` 而没有 `#fight=<id>` 的链接
+- 只到 `reports/REPORT_CODE` 而没有战斗 ID 的链接
 
 ## API
 
@@ -181,9 +199,13 @@ fragment 不会发到服务端，整个问题绕开。
 
 | 变量 | 说明 |
 | --- | --- |
+| `ALLOWED_GUILD_NAME` | 登录口令（访问网页时要输入的公会名）。**未配置时一律拒绝登录**，避免空值变成万能口令 |
 | `WCL_V1_API_KEY` | WCL V1 API Client Key |
 | `WCL_V1_CLIENT_NAME` | WCL V1 Client Name，仅记录，不直接参与请求 |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key |
 | `DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | 默认 `deepseek-flash` |
+| `DEEPSEEK_MAX_TOKENS` | 默认 `8000` |
 | `MAX_WCL_EVENT_PAGES` | 单条事件流的分页上限，超出会截断并在返回里给出警告 |
+| `TIMELINE_PREVIEW_LIMIT` | 摘要里时间轴的条数上限，默认 `1000` |
+| `REQUEST_TIMEOUT` | 访问 WCL 的超时秒数，默认 `60` |
