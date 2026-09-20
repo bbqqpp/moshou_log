@@ -47,9 +47,9 @@ def test_last_fight_is_deferred_to_the_client():
 
 def test_last_fight_accepted_in_query_string():
     report, fight = parse_wcl_url(
-        "https://www.warcraftlogs.com/reports/kpjAyZTN82Bt3ChL?fight=last"
+        "https://www.warcraftlogs.com/reports/AbCd1234EfGh5678?fight=last"
     )
-    assert report == "kpjAyZTN82Bt3ChL"
+    assert report == "AbCd1234EfGh5678"
     assert fight is None
 
 
@@ -83,9 +83,9 @@ def test_last_boss_fight_returns_none_when_no_boss_present():
 
 def test_parses_archon_gg_report_url():
     report, fight = parse_wcl_url(
-        "https://www.archon.gg/wow/reports/kpjAyZTN82Bt3ChL/fights/14/raid?locale=cn"
+        "https://www.archon.gg/wow/reports/AbCd1234EfGh5678/fights/14/raid?locale=cn"
     )
-    assert report == "kpjAyZTN82Bt3ChL"
+    assert report == "AbCd1234EfGh5678"
     assert fight == 14
 
 
@@ -97,7 +97,7 @@ def test_archon_url_without_www_or_scheme():
 
 def test_rejects_archon_url_without_fight_id():
     with pytest.raises(WCLUrlError):
-        parse_wcl_url("https://www.archon.gg/wow/reports/kpjAyZTN82Bt3ChL")
+        parse_wcl_url("https://www.archon.gg/wow/reports/AbCd1234EfGh5678")
 
 
 def test_archon_url_is_not_treated_as_a_wcl_report_path():

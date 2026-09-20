@@ -22,6 +22,8 @@ class AnalysisJob:
 
 
 class JobStore:
+    """暂存 extract 与 analyze 之间那份已拉取的战斗数据。"""
+
     def __init__(self, limit: int = 100):
         self.limit = limit
         self._jobs: dict[str, AnalysisJob] = {}

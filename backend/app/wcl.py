@@ -43,6 +43,7 @@ INTERRUPT_EVENT_FILTER = 'type in ("interrupt")'
 DISPEL_EVENT_FILTER = 'type in ("dispel")'
 RESOURCE_EVENT_FILTER = 'type in ("resourcechange")'
 COMBATANT_INFO_EVENT_FILTER = 'type in ("combatantinfo")'
+SPAWN_EVENT_FILTER = 'type in ("summon","create")'
 EVENT_VIEWS = {
     "buff_debuff_events": BUFF_DEBUFF_EVENT_FILTER,
     "cast_events": CAST_EVENT_FILTER,
@@ -50,6 +51,7 @@ EVENT_VIEWS = {
     "dispel_events": DISPEL_EVENT_FILTER,
     "resource_events": RESOURCE_EVENT_FILTER,
     "combatant_info_events": COMBATANT_INFO_EVENT_FILTER,
+    "spawn_events": SPAWN_EVENT_FILTER,
 }
 
 DEATH_WINDOW_PRE_MS = 15_000
@@ -69,6 +71,31 @@ def normalize_url(url: str) -> str:
     if not re.match(r"^https?://", value, re.IGNORECASE):
         value = f"https://{value}"
     return value
+
+
+def resolve_fight_reference(url: str, settings: Settings) -> tuple[str, int]:
+    """把用户给的链接解析成 `(report_code, fight_id)`。
+
+    与 `parse_wcl_url` 的区别是会**把 `#fight=last` 真的解析出来** —— 那需要一次
+    fights 列表的 API 调用（'last' 是 WCL 前端的语法糖，V1 API 不认）。
+    """
+    report_code, fight_id = parse_wcl_url(url)
+    if fight_id is not None:
+        return report_code, fight_id
+
+    encoded = urllib.parse.quote(report_code, safe="")
+    response = httpx.get(
+        f"https://www.warcraftlogs.com/v1/report/fights/{encoded}",
+        params={"api_key": settings.wcl_v1_api_key},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise WCLApiError(f"WCL 返回 {response.status_code}：{response.text[:300]}")
+
+    target = _last_boss_fight(response.json().get("fights") or [])
+    if target is None:
+        raise WCLApiError(f"{report_code} 里找不到 Boss 战，无法解析 `fight=last`")
+    return report_code, int(target["id"])
 
 
 def _parse_archon_url(parsed: urllib.parse.ParseResult) -> tuple[str, int]:

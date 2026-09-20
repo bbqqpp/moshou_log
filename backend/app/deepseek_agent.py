@@ -6,6 +6,7 @@ from typing import Any, Mapping
 import httpx
 
 from .config import settings
+from .boss_guides import find_boss_guide
 from .prompt import _sanitize, _light_fight, SYSTEM_PROMPT
 from .wcl_data_store import WCLDataStore
 
@@ -43,6 +44,7 @@ TOOLS = [
                             "interrupt_events",
                             "dispel_events",
                             "resource_events",
+                            "spawn_events",
                             "combatant_info_events",
                         ],
                     },
@@ -105,6 +107,8 @@ def _build_initial_messages(
             }
         )
 
+    boss_guide = find_boss_guide(fight)
+
     user_payload = {
         "report_code": report_code,
         "fight_id": fight_id,
@@ -130,6 +134,7 @@ def _build_initial_messages(
                 "interrupt_events",
                 "dispel_events",
                 "resource_events",
+                "spawn_events",
                 "combatant_info_events",
             ],
             "not_fetched_candidates_for_future_optimization": [
@@ -137,6 +142,7 @@ def _build_initial_messages(
             ],
         },
         "death_windows": death_windows,
+        "boss_guide": boss_guide,
         "query_hint": {
             "priority": [
                 "deaths",
@@ -151,6 +157,7 @@ def _build_initial_messages(
                 "interrupt_events",
                 "dispel_events",
                 "resource_events",
+                "spawn_events",
                 "combatant_info_events",
             ],
             "available_time_unit": "milliseconds",
@@ -161,7 +168,9 @@ def _build_initial_messages(
     user_text = (
         "请根据下面的战斗摘要开始复盘。"
         "如需更多证据，请调用 query_wcl_data 工具查询本地完整数据。\n\n"
-        f"```json\n{json.dumps(user_payload, ensure_ascii=False, indent=2)}\n```"
+        # 紧凑序列化：这一整块每轮 tool call 都会重发，缩进纯属白烧 token。
+        # 模型读紧凑 JSON 没有障碍，语义也完全等价。
+        f"```json\n{json.dumps(user_payload, ensure_ascii=False, separators=(',', ':'))}\n```"
     )
 
     return [

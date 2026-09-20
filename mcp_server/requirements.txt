@@ -1,0 +1,9 @@
+# MCP server 的独立依赖。
+#
+# 刻意与 backend/requirements.txt 分开：mcp 依赖 pydantic>=2.12 和 starlette>=0.49，
+# 而后端的 fastapi 0.115.6 要求 starlette<0.42、pydantic 锁在 2.10.5。
+# 装在一起会把后端环境搞坏（实测 FastAPI 直接 `Router.__init__() got an unexpected
+# keyword argument` 起不来）。所以这里用独立 venv。
+mcp>=2.0
+httpx==0.28.1
+python-dotenv==1.0.1

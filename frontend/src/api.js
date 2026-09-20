@@ -31,6 +31,15 @@ function requestError(payload, fallback, status) {
   return error
 }
 
+async function getJson(url) {
+  const response = await fetch(url, { headers: authHeaders() })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw requestError(payload, `请求失败：HTTP ${response.status}`, response.status)
+  }
+  return payload
+}
+
 export async function login(guildName) {
   const response = await fetch('/api/login', {
     method: 'POST',
@@ -73,65 +82,103 @@ export async function extractReport(url) {
   return payload
 }
 
-export function streamAnalysis(taskId, handlers = {}, options = {}) {
-  const controller = new AbortController()
-  const decoder = new TextDecoder()
-  let buffer = ''
+/** 侧边栏报告库（需登录）。 */
+export function fetchReports() {
+  return getJson('/api/reports')
+}
 
-  const emit = (payload) => {
-    if (!payload || typeof payload !== 'object') return
-    if (payload.type === 'progress') handlers.onProgress?.(payload.message)
-    if (payload.type === 'delta') handlers.onDelta?.(payload.content || '')
-    if (payload.type === 'done') handlers.onDone?.(payload.message)
-    if (payload.type === 'error') handlers.onError?.(payload.message)
-  }
+/** 单场战斗报告。公开只读 —— 分享链接靠它免登录打开。 */
+export function fetchFightReport(reportCode, fightId) {
+  return getJson(
+    `/api/reports/${encodeURIComponent(reportCode)}/${encodeURIComponent(fightId)}`,
+  )
+}
 
+/** 单份玩家报告。公开只读。 */
+export function fetchPlayerReport(reportCode, fightId, kind, slug) {
+  return getJson(
+    `/api/reports/${encodeURIComponent(reportCode)}/${encodeURIComponent(fightId)}` +
+      `/players/${encodeURIComponent(kind)}/${encodeURIComponent(slug)}`,
+  )
+}
+
+/** 启动整场复盘。立即返回状态，不等 DeepSeek 跑完。 */
+export async function startAnalysis(taskId, options = {}) {
   const query = new URLSearchParams()
   if (options.ignoreCache) query.set('ignore_cache', 'true')
   const suffix = query.toString() ? `?${query.toString()}` : ''
 
-  fetch(`/api/analysis/${taskId}/stream${suffix}`, {
-    headers: authHeaders({ Accept: 'text/event-stream' }),
-    signal: controller.signal,
+  const response = await fetch(`/api/analysis/${encodeURIComponent(taskId)}${suffix}`, {
+    method: 'POST',
+    headers: authHeaders(),
   })
-    .then(async (response) => {
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null)
-        const error = requestError(payload, `分析请求失败：HTTP ${response.status}`, response.status)
-        if (response.status === 401) {
-          handlers.onUnauthorized?.(error.message)
-          return
-        }
-        throw error
-      }
-      if (!response.body) throw new Error('浏览器不支持流式响应')
 
-      const reader = response.body.getReader()
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw requestError(payload, `分析失败：HTTP ${response.status}`, response.status)
+  }
 
-        buffer += decoder.decode(value, { stream: true })
-        const blocks = buffer.split('\n\n')
-        buffer = blocks.pop() || ''
+  return payload
+}
 
-        for (const block of blocks) {
-          for (const line of block.split('\n')) {
-            if (!line.startsWith('data:')) continue
-            const raw = line.slice(5).trim()
-            if (!raw) continue
-            try {
-              emit(JSON.parse(raw))
-            } catch {
-              // Ignore malformed SSE lines, keep reading the stream.
-            }
-          }
-        }
-      }
-    })
-    .catch((error) => {
-      if (error?.name !== 'AbortError') handlers.onError?.(error.message)
-    })
+/** 查一次整场复盘的状态。 */
+export async function fetchAnalysisState(taskId) {
+  const response = await fetch(`/api/analysis/${encodeURIComponent(taskId)}`, {
+    headers: authHeaders(),
+  })
 
-  return () => controller.abort()
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw requestError(payload, `查询分析状态失败：HTTP ${response.status}`, response.status)
+  }
+
+  return payload
+}
+
+const POLL_INTERVAL_MS = 3000
+const POLL_TIMEOUT_MS = 20 * 60 * 1000
+
+/** 调用方主动中止轮询（组件卸载）时抛这个，据此静默退出。 */
+export class StoppedError extends Error {}
+
+/**
+ * 轮询到整场复盘结束。
+ *
+ * 不用一根长连接等到底，是因为 Cloudflare 的代理读超时是 **100 秒** ——
+ * 静默太久直接返回 524（免费/Pro 版不可调）。而整场复盘要跑 DeepSeek 工具循环
+ * 1-3 分钟。拆成多次短请求任何反代都能过，客户端拿到的仍然是整段正文。
+ *
+ * 玩家报告实测 12 秒，远在 100 秒以内，所以那条链路不需要轮询。
+ */
+export async function waitForAnalysis(taskId, { shouldStop, onTick } = {}) {
+  const startedAt = Date.now()
+  const deadline = startedAt + POLL_TIMEOUT_MS
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+    if (shouldStop?.()) throw new StoppedError('stopped')
+
+    onTick?.(Math.round((Date.now() - startedAt) / 1000))
+
+    const state = await fetchAnalysisState(taskId)
+    if (state.status !== 'running') return state
+  }
+
+  throw new Error('分析超时（超过 20 分钟）。稍后可以在左侧报告库里看看结果是否已经出来。')
+}
+
+/** 生成玩家报告并等结果。1 个玩家 = 单人复盘，2 个 = 对比。 */
+export async function generatePlayerReport(reportCode, fightId, players) {
+  const response = await fetch('/api/player-reports/analyze', {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ report_code: reportCode, fight_id: fightId, players }),
+  })
+
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw requestError(payload, `生成失败：HTTP ${response.status}`, response.status)
+  }
+
+  return payload
 }

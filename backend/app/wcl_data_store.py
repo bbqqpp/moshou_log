@@ -22,6 +22,7 @@ TABLE_KEYS = (
     "interrupt_events",
     "dispel_events",
     "resource_events",
+    "spawn_events",
     "combatant_info_events",
 )
 
@@ -32,6 +33,7 @@ EVENT_TYPES = {
     "interrupt_events",
     "dispel_events",
     "resource_events",
+    "spawn_events",
     "combatant_info_events",
 }
 

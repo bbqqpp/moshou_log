@@ -26,6 +26,10 @@ def _float(name: str, default: float) -> float:
 
 @dataclass
 class Settings:
+    # 登录用的公会名。**不要硬编码回源码里** —— 这个仓库是公开的，
+    # 写死等于把进入口令贴在 README 上。没配就一律拒绝登录，见 auth.py。
+    allowed_guild_name: str = os.getenv("ALLOWED_GUILD_NAME", "")
+
     wcl_v1_api_key: str = os.getenv("WCL_V1_API_KEY", "")
     wcl_v1_client_name: str = os.getenv("WCL_V1_CLIENT_NAME", "")
 
@@ -35,7 +39,6 @@ class Settings:
     deepseek_max_tokens: int = _int("DEEPSEEK_MAX_TOKENS", 8000)
 
     max_wcl_event_pages: int = _int("MAX_WCL_EVENT_PAGES", 200)
-    max_deepseek_event_chars: int = _int("MAX_DEEPSEEK_EVENT_CHARS", 140000)
     timeline_preview_limit: int = _int("TIMELINE_PREVIEW_LIMIT", 1000)
     request_timeout: float = _float("REQUEST_TIMEOUT", 60)
 
