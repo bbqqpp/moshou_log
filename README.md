@@ -1,13 +1,13 @@
 # WCL 战斗日志分析网站
 
-输入一条 Warcraft Logs 正式服公开战斗链接，后端通过 WCL V1 tables 接口拉取伤害、治疗、承伤、死亡、Buff/Debuff 和施法数据，再调用 DeepSeek 生成中文深度复盘。
+输入一条 Warcraft Logs 正式服公开战斗链接，后端通过 WCL V2 GraphQL 接口拉取伤害、治疗、承伤、死亡、Buff/Debuff 和施法数据，再调用 DeepSeek 生成中文深度复盘。
 
 ## 技术栈
 
 - 前端：React + Vite
 - 后端：FastAPI + HTTPX
 - AI：DeepSeek `chat/completions` 接口
-- WCL：V1 REST `fights` + 10 个 `tables` 视图 + 8 条过滤事件流（Client Key）
+- WCL：V2 GraphQL `report.fights` + `report.table` + `report.events`（client credentials）
 - 集成：MCP server（`mcp_server/`）+ 两个 Claude Code skill（`.claude/skills/`）
 
 ## 当前拉取的 WCL 数据
@@ -32,6 +32,21 @@
 - `combatant_info_events`：客户端上报的专精 ID（比解析职业名可靠）
 - `spawn_events`：召唤物
 
+5 项 V2 独有数据（V1 拿不到）：
+
+- `rankings`：每人的 **parse 百分位**（灰绿蓝紫橙）与同装等区间。
+  **灭团场次没有排名** —— WCL 只给击杀场次排名
+- `phases`：**真实阶段划分**（来自战斗日志，不是手写攻略），含阶段名、是否转阶段、起止时间。
+  与 `fight.phaseTransitions` 拼成完整时间轴
+- `player_details`：专精、装等区间、**爆发药水与治疗石使用次数**
+- `survivability`：0-1 生存分，**相对同专精**计算（比承伤总量公平——承伤高可能只是因为你是坦克）
+- `graph` ⚠️：输出时间序列。**WCL 这个接口实测不稳定**（同一查询时有时无），
+  拿不到时会显式标记不可用，前端不渲染
+
+以上只是 WCL 能提供的一部分。还有 M+ 分波拉怪（`fight.dungeonPulls`）、仇恨表、
+走位坐标（`includeResources` 带的 `x`/`y`）、光环条件过滤等没接。完整清单、
+实测坑位和接入顺序见 [`docs/wcl-api-roadmap.md`](docs/wcl-api-roadmap.md)。
+
 ## 目录结构
 
 - `backend/`：FastAPI 服务、WCL 拉取、数据聚合、DeepSeek 调用
@@ -43,6 +58,7 @@
 - `frontend/`：React 单页应用
 - `mcp_server/`：MCP server，把取数、查询、深度分析和 DeepSeek 复盘暴露成 MCP 工具
 - `.claude/skills/`：两个 Claude Code skill —— 单场复盘与技能循环对比
+- `docs/wcl-api-roadmap.md`：WCL 数据能力清单与接入路线图（待办、风险、参考资料）
 - `backend/.env.example`：配置模板
 
 ## 启动方式
@@ -57,8 +73,8 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env，至少填写：
 #   ALLOWED_GUILD_NAME   ← 登录口令，不填则任何人都登录不进来
-#   WCL_V1_API_KEY
-#   WCL_V1_CLIENT_NAME
+#   WCL_CLIENT_ID
+#   WCL_CLIENT_SECRET
 #   DEEPSEEK_API_KEY
 uvicorn app.main:app --reload --port 8001
 ```
@@ -69,13 +85,26 @@ uvicorn app.main:app --reload --port 8001
 curl http://127.0.0.1:8001/api/health
 ```
 
-### 1.1 获取 WCL V1 密钥
+### 1.1 获取 WCL V2 凭证
 
-- 登录 `https://www.warcraftlogs.com`
-- 打开右上角账户菜单中的 `Settings`，或直接访问 `https://www.warcraftlogs.com/accounts/changeuser`
-- 页面底部的 `Public key` 就是 `WCL_V1_API_KEY`
+用你已有的 WCL 账号登录 `https://www.warcraftlogs.com`，打开 [warcraftlogs.com/api/clients](https://www.warcraftlogs.com/api/clients/) → `Create Client`：
 
-`WCL_V1_CLIENT_NAME` 不是 WCL 下发的固定密钥，而是这个应用的标记名称，V1 请求实际只使用 `api_key`；填任意可识别名字即可，例如 `moshou_log`。
+- Name 随便填（仅用于在授权页面向用户展示），例如 `moshou_log`
+- **不要勾选 `Public Client`** —— 勾了就只走 PKCE 流程、拿不到 secret，只能删掉重建
+- Redirect URI 表单必填，但走 client credentials 时**不会被用到**，填一个本机地址即可，例如 `http://127.0.0.1:8001/callback`
+- 创建后立刻复制 `Client ID` 与 `Client Secret`（secret 只显示一次）
+
+验证凭证可用：
+
+```bash
+curl -u <client_id>:<client_secret> \
+  -d grant_type=client_credentials \
+  https://www.warcraftlogs.com/oauth/token
+```
+
+返回带 `access_token` 即成功。**国服注意**：WCL 目前不支持绑定国服战网账号，若建 client 时被挡住，需要在同一 WCL 账号上额外绑一个受支持区服（如台服）。
+
+配额为 **3600 点/小时**，分析一场战斗约消耗 40-60 点。`dataType: All` 的事件查询按页扣点，这是唯一容易被烧完的操作。
 
 ### 2. 前端开发模式
 
@@ -200,8 +229,8 @@ fragment 不会发到服务端，整个问题绕开。
 | 变量 | 说明 |
 | --- | --- |
 | `ALLOWED_GUILD_NAME` | 登录口令（访问网页时要输入的公会名）。**未配置时一律拒绝登录**，避免空值变成万能口令 |
-| `WCL_V1_API_KEY` | WCL V1 API Client Key |
-| `WCL_V1_CLIENT_NAME` | WCL V1 Client Name，仅记录，不直接参与请求 |
+| `WCL_CLIENT_ID` | WCL V2 client ID（OAuth client credentials） |
+| `WCL_CLIENT_SECRET` | WCL V2 client secret |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key |
 | `DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | 默认 `deepseek-flash` |

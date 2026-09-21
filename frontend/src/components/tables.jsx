@@ -15,6 +15,30 @@ export function renderCell(value) {
   return String(value)
 }
 
+/** 大秘境判定：`keystoneLevel` 只有副本才有（团本是 null）。 */
+export function isMythicPlus(fight) {
+  return fight?.keystoneLevel !== null && fight?.keystoneLevel !== undefined
+}
+
+/**
+ * 战斗结果的标签。
+ *
+ * 大秘境用「限时 / 超时」——`keystoneBonus` 为 0 表示超时（黑掉），
+ * 1/2/3 表示 +1/+2/+3。团本才是「击杀 / 灭团」，两者语义不能混。
+ */
+export function fightOutcome(fight) {
+  if (isMythicPlus(fight)) {
+    const bonus = fight?.keystoneBonus
+    // V1 时代的历史缓存没有 keystoneBonus（那时叫 medal 且语义不同）。
+    // **不能把「未知」显示成「超时」** —— 那会把一场限时的副本说成黑掉的。
+    if (bonus === null || bonus === undefined) {
+      return fight?.kill ? '通关' : '未通关'
+    }
+    return bonus > 0 ? '限时' : '超时'
+  }
+  return fight?.kill ? '击杀' : '灭团'
+}
+
 export function formatDuration(fight) {
   if (!fight?.start_time && !fight?.end_time) return '未知'
   const seconds = Math.max(0, ((fight.end_time || 0) - (fight.start_time || 0)) / 1000)
@@ -60,6 +84,39 @@ const CLASS_COLORS = {
 
 export function getClassColor(row) {
   return CLASS_COLORS[row?.class] || '#E6E9EF'
+}
+
+// WCL parse 百分位的档位配色，和网站上一致（灰 → 绿 → 蓝 → 紫 → 橙 → 粉）
+const PARSE_COLORS = [
+  { min: 99, color: '#e268a8' },
+  { min: 95, color: '#ff8000' },
+  { min: 75, color: '#a335ee' },
+  { min: 50, color: '#0070dd' },
+  { min: 25, color: '#1eff00' },
+]
+
+export function parseColor(percent) {
+  const value = Number(percent)
+  if (!Number.isFinite(value)) return '#8b93a7'
+  const tier = PARSE_COLORS.find((entry) => value >= entry.min)
+  return tier ? tier.color : '#9aa0a6'
+}
+
+/** parse 百分位徽标。没有数据时显示占位而不是 0 —— 0 和「没有排名」是两回事。 */
+export function ParseBadge({ percent, size }) {
+  if (percent === null || percent === undefined) {
+    return <span className="parse-badge parse-none">—</span>
+  }
+  const value = Number(percent)
+  return (
+    <span
+      className="parse-badge"
+      style={{ color: parseColor(value), fontSize: size }}
+      title={`同装等区间内的百分位：${value}`}
+    >
+      {Math.round(value)}
+    </span>
+  )
 }
 
 export function StatCard({ label, value }) {

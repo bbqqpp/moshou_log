@@ -52,7 +52,7 @@ TypeError: Router.__init__() got an unexpected keyword argument
 }
 ```
 
-API key 从 `backend/.env` 读取（`WCL_V1_API_KEY` / `DEEPSEEK_API_KEY`）。
+凭证从 `backend/.env` 读取（`WCL_CLIENT_ID` / `WCL_CLIENT_SECRET` / `DEEPSEEK_API_KEY`）。
 
 ## 手动验证
 

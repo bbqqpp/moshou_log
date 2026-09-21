@@ -54,6 +54,8 @@ export default function PlayerReportView({ reportCode, fightId, kind, slug, onUn
         <h1>{players.join(' vs ')}</h1>
         <p className="hero-subtitle">
           {specs.filter(Boolean).join(' vs ')} · 生成于 {formatDate(data.created_at)}
+          {/* 玩家报告的提示词版本变了（大秘境分流就改过），旧报告要标出来 */}
+          {data.stale ? ' · 旧版' : ''}
         </p>
         <div className="auth-bar">
           <button

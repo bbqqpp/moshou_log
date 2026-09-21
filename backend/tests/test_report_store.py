@@ -108,3 +108,34 @@ def test_strip_preamble_keeps_text_without_any_heading():
 
 def test_strip_preamble_handles_empty():
     assert strip_preamble("") == ""
+
+
+def test_player_reports_carry_a_prompt_signature(tmp_path):
+    """玩家报告要能判断「是不是按当前提示词写的」。
+
+    整场复盘有 `AnalysisCache._signature()`，玩家报告一直没有 —— 改了玩家提示词
+    （大秘境分流就改过）之后旧报告不会被标记，却仍是按旧提示词写的。
+    实测：加上之后磁盘上 12 份存量报告全部正确标为过期。
+    """
+    store = PlayerReportStore(tmp_path)
+    store.save(
+        "ReportD012", 5, "single", ["甲"],
+        specs=["恢复萨满祭司"], analysis="# 报告\n正文",
+    )
+
+    record = store.get("ReportD012", 5, "single", store.list_all()[0]["slug"])
+    assert record is not None
+    assert record["stale"] is False          # 刚写的，签名是当前的
+    assert record["signature"]
+
+    # 列表投影也要带这个标记
+    assert store.list_all()[0]["stale"] is False
+
+    # 老记录没有 signature 字段 → 一律视为过期
+    (tmp_path / "ReportD012__6__single__deadbeef00.json").write_text(
+        '{"report_code":"ReportD012","fight_id":6,"kind":"single","slug":"deadbeef00",'
+        '"players":["乙"],"analysis":"# 老报告"}',
+        encoding="utf-8",
+    )
+    legacy = [r for r in store.list_all() if r["fight_id"] == 6][0]
+    assert legacy["stale"] is True

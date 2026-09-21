@@ -1,6 +1,8 @@
 .env
 backend/storage/analysis_cache/
 backend/storage/wcl_data/
+# 词缀 id→中文名对照表，自动从 WCL 国服端点刷新
+backend/storage/affixes.json
 backend/storage/player_reports/
 # Claude Code 的本机私有配置：settings.local.json 是权限记录，
 # .mcp.json 里是绝对路径（别人 clone 下来无效，还暴露本机用户名）

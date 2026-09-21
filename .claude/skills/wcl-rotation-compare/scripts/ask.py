@@ -29,7 +29,10 @@ sys.path.insert(0, str(BACKEND_DIR))
 import httpx  # noqa: E402
 
 from app.config import settings  # noqa: E402
-from app.player_report import COMPARISON_SYSTEM_PROMPT as SYSTEM_PROMPT  # noqa: E402
+from app.player_report import (  # noqa: E402
+    COMPARISON_SYSTEM_PROMPT,
+    MYTHIC_PLUS_COMPARISON_SYSTEM_PROMPT,
+)
 
 
 def main() -> None:
@@ -44,6 +47,16 @@ def main() -> None:
 
     payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
     a, b = payload["a"], payload["b"]
+
+    # 大秘境和团本是两套分析框架，提示词必须跟着 payload 走 ——
+    # `prepare.py` 已经把 `mythic_plus` 写在顶层（`build_comparison` 抬上去的）。
+    # 固定用团本那份会把副本的对比硬套进「阶段 / 灭团 / parse」的框架里，
+    # 而 payload 里既没有 phases 也没有 parse。
+    system_prompt = (
+        MYTHIC_PLUS_COMPARISON_SYSTEM_PROMPT
+        if payload.get("mythic_plus")
+        else COMPARISON_SYSTEM_PROMPT
+    )
 
     user_text = (
         f"请对比 {a['player']}（{a['spec']}）与 {b['player']}（{b['spec']}）的技能释放顺序和输出差异。\n\n"
@@ -62,7 +75,7 @@ def main() -> None:
         json={
             "model": args.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text},
             ],
             "stream": False,

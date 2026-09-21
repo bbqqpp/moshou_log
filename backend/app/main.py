@@ -17,6 +17,7 @@ from .deepseek_agent import run_deepseek_tool_loop
 from .errors import WCLApiError, WCLAuthError, WCLUrlError
 from .jobs import JobStore
 from .player_compare import resolve_player
+from .wow import is_mythic_plus
 from .player_report import (
     build_comparison_payload,
     build_roster,
@@ -69,7 +70,7 @@ def _require_auth(authorization: str | None = Header(default=None)) -> str:
 async def health() -> dict[str, Any]:
     return {
         "status": "ok",
-        "wcl_configured": bool(settings.wcl_v1_api_key),
+        "wcl_configured": bool(settings.wcl_client_id and settings.wcl_client_secret),
         "deepseek_configured": bool(settings.deepseek_api_key),
     }
 
@@ -95,8 +96,11 @@ async def extract_fight(
     request: ExtractRequest,
     _: str = Depends(_require_auth),
 ) -> dict[str, Any]:
-    if not settings.wcl_v1_api_key:
-        raise HTTPException(status_code=500, detail="后端未配置 WCL_V1_API_KEY，请检查 backend/.env")
+    if not (settings.wcl_client_id and settings.wcl_client_secret):
+        raise HTTPException(
+            status_code=500,
+            detail="后端未配置 WCL_CLIENT_ID / WCL_CLIENT_SECRET，请检查 backend/.env",
+        )
 
     try:
         report_code, fight_id = parse_wcl_url(request.url)
@@ -132,6 +136,7 @@ async def extract_fight(
         timeline_limit=settings.timeline_preview_limit,
         duration_ms=fight_duration_ms,
         fight_start_ms=fight_start_ms,
+        fight=fight,
     )
     job = jobs.create(
         report_code=report_code,
@@ -146,11 +151,16 @@ async def extract_fight(
     if requested_last:
         # Say which fight `last` actually landed on — WCL's boss marking is
         # inconsistent, so this is not always the pull the user just did.
-        outcome = "击杀" if fight.get("kill") else "灭团"
-        warnings.append(
-            f"`fight=last` 已解析为第 {fight_id} 场 Boss 战："
-            f"{fight.get('name') or '未知'}（{outcome}）"
-        )
+        # 副本不是「Boss 战」，结果也不是击杀/灭团 —— 措辞要跟着分流。
+        if is_mythic_plus(fight):
+            bonus = fight.get("keystoneBonus")
+            # keystoneBonus 缺失（V1 历史缓存）时是「未知」，不是「超时」
+            outcome = "限时" if (bonus or 0) > 0 else ("超时" if bonus is not None else "已通关")
+            label = f"+{fight.get('keystoneLevel') or '?'} {fight.get('name') or '未知'}（{outcome}）"
+        else:
+            outcome = "击杀" if fight.get("kill") else "灭团"
+            label = f"{fight.get('name') or '未知'}（{outcome}）"
+        warnings.append(f"`fight=last` 已解析为第 {fight_id} 场：{label}")
     if summary.get("table_errors"):
         warnings.append("部分 WCL tables 获取失败，分析可能缺少该部分数据")
 
@@ -298,6 +308,7 @@ def _load_fight_view(
         timeline_limit=settings.timeline_preview_limit,
         duration_ms=duration_ms,
         fight_start_ms=fight_start_ms,
+        fight=fight,
     )
     return fight, summary, build_roster(data)
 
@@ -347,6 +358,11 @@ async def get_fight_report(report_code: str, fight_id: int) -> dict[str, Any]:
         "analysis": strip_preamble(str(record.get("analysis") or "")),
         "summary": summary,
         "roster": roster,
+        # 分析正文在很小的 analysis_cache 里，逐场数据却在 1GB 上限、被 gitignore 的
+        # wcl_data 里 —— 那份文件被清掉时这里会是 None。**必须显式告诉前端**，
+        # 否则前端把 `summary?.death_count || 0` 渲染成「死亡数量 0 ·
+        # 本场战斗没有死亡记录」，把「数据缺失」断言成「这场没死人」。
+        "data_missing": summary is None,
         "player_reports": player_report_store.list_for_fight(report_code, fight_id),
     }
 
@@ -371,6 +387,9 @@ async def get_player_report(
         "players": record.get("players") or [],
         "specs": record.get("specs") or [],
         "created_at": record.get("created_at"),
+        # 玩家报告也有提示词版本了（report_store._signature）—— 改了玩家提示词之后，
+        # 旧报告会在这里被标出来，而不是继续冒充当前版本的输出
+        "stale": bool(record.get("stale")),
         "analysis": strip_preamble(str(record.get("analysis") or "")),
     }
 

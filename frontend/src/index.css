@@ -750,6 +750,21 @@ tbody tr:hover {
   font-size: 11px;
 }
 
+/* parse 百分位的档位配色由 JS 按档位给（见 tables.jsx 的 parseColor），
+   这里只管排版。等宽数字让一列百分位能对齐。 */
+.parse-badge {
+  flex: 0 0 auto;
+  min-width: 20px;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.parse-badge.parse-none {
+  color: #465062;
+}
+
 .picker-actions {
   display: flex;
   gap: 8px;

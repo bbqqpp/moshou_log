@@ -10,7 +10,17 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .aggregation import _build_actor_catalog, _entries, _number
+from .aggregation import (
+    _build_actor_catalog,
+    is_player_entry,
+    _entries,
+    _extras_index,
+    _number,
+    keystone_summary,
+    phase_timeline,
+    pull_summary,
+)
+from .wow import is_mythic_plus
 from .config import settings
 from .deep_analysis import (
     ability_counts,
@@ -116,7 +126,12 @@ def build_player_payload(data: Mapping[str, Any], player: str) -> dict[str, Any]
     active_ms = _number(entry.get("activeTime")) or duration_ms
     total = _number(entry.get("total"))
     view = "healing" if kind == "healing" else "damage-done"
-    raid_total = sum(_number(e.get("total")) for e in _entries(tables.get(view)))
+    # 分母只算玩家：榜单（summarize_tables 的 damage_done/healing_done）已经筛掉了
+    # BOSS/NPC/宠物，这里不筛的话 output_share_percent 会和 summary 里的 percent
+    # 用两个不同的分母，同一个玩家在两个地方占比不一样。
+    raid_total = sum(
+        _number(e.get("total")) for e in _entries(tables.get(view)) if is_player_entry(e)
+    )
 
     abilities = [
         {
@@ -145,6 +160,8 @@ def build_player_payload(data: Mapping[str, Any], player: str) -> dict[str, Any]
         "spec_id": spec_id,
         "spec": info.get("role_label") or localize_spec_id(spec_id)["label"],
         "output_kind": kind,
+        # 大秘境和团本走两套提示词，这个标识由 run_player_report 读取
+        "mythic_plus": is_mythic_plus(fight),
         "item_level": entry.get("itemLevel") or info.get("item_level"),
         "fight_name": fight.get("name"),
         "difficulty": fight.get("difficulty"),
@@ -203,6 +220,51 @@ def build_player_payload(data: Mapping[str, Any], player: str) -> dict[str, Any]
     if charges["消耗次数"]:
         payload["arcane_charge"] = charges
 
+    # --- V2 独有数据（V1 历史缓存里没有，取不到就不放这些键）---
+    ranking = _extras_index(tables, "rankings").get(actor_id)
+    if ranking:
+        payload["parse"] = {
+            "rank_percent": ranking.get("rankPercent"),
+            "bracket_percent": ranking.get("bracketPercent"),
+            "rank": ranking.get("rank"),
+            "total_parses": ranking.get("totalParses"),
+            # 同装等区间。用于把「装备差异」和「手法差异」分开
+            "bracket_ilvl": ranking.get("bracketData"),
+            "note": "rank_percent 是同装等区间内的百分位，不是绝对水平；"
+                    "它衡量的是这一场相对同专精同装等所有记录的位置",
+        }
+
+    detail = _extras_index(tables, "player_details").get(actor_id)
+    if detail:
+        payload["consumables"] = {
+            "potion_use": detail.get("potionUse"),
+            "healthstone_use": detail.get("healthstoneUse"),
+            "note": "爆发药水使用次数。少于战斗时长允许的次数通常意味着漏开",
+        }
+
+    survival = _extras_index(tables, "survivability").get(actor_id)
+    if survival and survival.get("survivability") is not None:
+        payload["survivability"] = {
+            "score": survival.get("survivability"),
+            "note": "0-1 的生存分，相对同专精计算；比承伤总量公平——"
+                    "承伤高可能只是因为你是坦克",
+        }
+
+    fight = data.get("fight") or {}
+
+    # 大秘境和团本是两套分析框架，payload 也要跟着分叉：
+    # 大秘境给「拉怪分段 + 钥匙信息」，团本给「阶段划分」。
+    # 注意 `parse` 在大秘境下本来就不会出现（rankings 是空的），不用特殊处理。
+    if is_mythic_plus(fight):
+        payload["keystone"] = keystone_summary(fight)
+        pulls = pull_summary(fight, tables)
+        if pulls:
+            payload["pull_summary"] = pulls
+    else:
+        phases = phase_timeline(fight, tables)
+        if phases:
+            payload["phases"] = phases
+
     return payload
 
 
@@ -260,6 +322,11 @@ def build_fairness(a: Mapping[str, Any], b: Mapping[str, Any]) -> dict[str, Any]
 def build_comparison(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     """把两边拼成完整对比数据，含空窗交叉判定。"""
     payload: dict[str, Any] = {"a": a, "b": b}
+    # `run_player_report` 从**顶层**读这个标识来选提示词。不提到顶层的话
+    # 双人对比会退回团本提示词（两边各自的标识埋在 a/b 里读不到）。
+    # 两边不一致时取「或」：网页入口两边必然同一场；跨场对比如果一边是副本，
+    # 用大秘境那套至少能正确处理拉怪分段。
+    payload["mythic_plus"] = bool(a.get("mythic_plus") or b.get("mythic_plus"))
     payload["fairness"] = build_fairness(a, b)
     payload["idle_comparison"] = compare_idle_windows(
         a.get("rotation", []),

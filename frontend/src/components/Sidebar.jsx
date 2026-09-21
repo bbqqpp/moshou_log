@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { fetchReports } from '../api'
 import { fightPath, navigate, playerPath } from '../router'
-import { formatDate, formatDuration } from './tables'
+import { fightOutcome, formatDate, formatDuration } from './tables'
 
 export default function Sidebar({ version, activeKey, isHome, onUnauthorized }) {
   const [reports, setReports] = useState(null)
@@ -110,7 +110,7 @@ export default function Sidebar({ version, activeKey, isHome, onUnauthorized }) 
                   <span className="report-meta">
                     {fight.name ? (
                       <span className={fight.kill ? 'tag-kill' : 'tag-wipe'}>
-                        {fight.kill ? '击杀' : '灭团'}
+                        {fightOutcome(fight)}
                       </span>
                     ) : (
                       <span className="tag-plain">第 {item.fight_id} 场</span>

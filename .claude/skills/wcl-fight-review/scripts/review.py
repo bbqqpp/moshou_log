@@ -51,6 +51,9 @@ async def _run(report_code: str, fight_id: int) -> str:
         timeline_limit=settings.timeline_preview_limit,
         duration_ms=duration_ms,
         fight_start_ms=fight_start,
+        # 不传 fight 就拿不到真实阶段时间轴（summary.phases 会恒为空），
+        # skill 链路的报告会和网页端得出不一样的阶段结论
+        fight=fight,
     )
 
     store = WCLDataStore(BACKEND_DIR / "storage" / "wcl_data")

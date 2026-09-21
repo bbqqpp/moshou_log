@@ -7,7 +7,8 @@ import httpx
 
 from .config import settings
 from .boss_guides import find_boss_guide
-from .prompt import _sanitize, _light_fight, SYSTEM_PROMPT
+from .prompt import _sanitize, _light_fight, system_prompt_for
+from .wow import is_mythic_plus
 from .wcl_data_store import WCLDataStore
 
 MAX_TOOL_ROUNDS = 20
@@ -46,6 +47,9 @@ TOOLS = [
                             "resource_events",
                             "spawn_events",
                             "combatant_info_events",
+                            "rankings",
+                            "survivability",
+                            "player_details",
                         ],
                     },
                     "player": {
@@ -81,7 +85,7 @@ def _build_initial_messages(
     summary: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     system_content = (
-        SYSTEM_PROMPT
+        system_prompt_for(fight)
         + "\n\n"
         + "完整数据已经保存在服务器本地，不要试图一次读取所有数据。"
         + "请先分析前端发来的摘要，按需调用 query_wcl_data 查询具体时间段、玩家或数据类型。"
@@ -107,7 +111,12 @@ def _build_initial_messages(
             }
         )
 
-    boss_guide = find_boss_guide(fight)
+    # 大秘境**完全不写 `boss_guide` 这个键**（不是写 null）——连键名带概念
+    # 都不该出现在大秘境的分析上下文里。团本照旧（没有攻略时保留 null，
+    # 提示词里本来就是按「如果附带 boss_guide」措辞的）。
+    guide_fields = (
+        {} if is_mythic_plus(fight) else {"boss_guide": find_boss_guide(fight)}
+    )
 
     user_payload = {
         "report_code": report_code,
@@ -137,12 +146,18 @@ def _build_initial_messages(
                 "spawn_events",
                 "combatant_info_events",
             ],
+            # V2 独有。灭团场次 rankings 为空（WCL 只给击杀排名）。
+            "derived_tables": [
+                "rankings",
+                "survivability",
+                "player_details",
+            ],
             "not_fetched_candidates_for_future_optimization": [
                 "high-frequency positional sampling for movement reconstruction",
             ],
         },
         "death_windows": death_windows,
-        "boss_guide": boss_guide,
+        **guide_fields,
         "query_hint": {
             "priority": [
                 "deaths",

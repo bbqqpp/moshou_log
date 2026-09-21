@@ -5,7 +5,7 @@ import { fightPath, navigate, playerPath } from '../router'
 import FightDashboard from './FightDashboard'
 import Markdown from './Markdown'
 import ShareButton from './ShareButton'
-import { formatDate, formatDuration } from './tables'
+import { ParseBadge, fightOutcome, formatDate, formatDuration } from './tables'
 
 /**
  * 浏览一份已经存在的战斗报告（从侧边栏或分享链接进来）。
@@ -110,7 +110,7 @@ export default function FightView({
         <p className="eyebrow">已保存的战斗报告</p>
         <h1>{fight.name || reportCode}</h1>
         <p className="hero-subtitle">
-          {fight.kill ? '击杀' : '灭团'} · {formatDuration(fight)} · 生成于{' '}
+          {fightOutcome(fight)} · {formatDuration(fight)} · 生成于{' '}
           {formatDate(data.created_at)}
         </p>
         <div className="auth-bar">
@@ -124,8 +124,13 @@ export default function FightView({
         </div>
       )}
 
-      <FightDashboard fight={fight} summary={data.summary}>
-        {!readOnly && (
+      <FightDashboard
+        fight={fight}
+        summary={data.summary}
+        dataMissing={data.data_missing}
+      >
+        {/* 原始数据不在时名册是空的，选择器没有意义 —— 只留正文 */}
+        {!readOnly && !data.data_missing && (
           <section className="data-table player-picker">
             <h3>生成玩家报告</h3>
             <p className="muted">选 1 名玩家出单人复盘，选 2 名出对比分析。</p>
@@ -152,6 +157,8 @@ export default function FightView({
                     {player.item_level ? (
                       <span className="picker-ilvl">{player.item_level}</span>
                     ) : null}
+                    {/* parse 百分位：同装等区间内的水平。灭团场次没有，显示占位 */}
+                    <ParseBadge percent={player.parse_percent} />
                   </label>
                 )
               })}

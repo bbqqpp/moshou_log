@@ -30,8 +30,8 @@ class Settings:
     # 写死等于把进入口令贴在 README 上。没配就一律拒绝登录，见 auth.py。
     allowed_guild_name: str = os.getenv("ALLOWED_GUILD_NAME", "")
 
-    wcl_v1_api_key: str = os.getenv("WCL_V1_API_KEY", "")
-    wcl_v1_client_name: str = os.getenv("WCL_V1_CLIENT_NAME", "")
+    wcl_client_id: str = os.getenv("WCL_CLIENT_ID", "")
+    wcl_client_secret: str = os.getenv("WCL_CLIENT_SECRET", "")
 
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")

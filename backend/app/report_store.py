@@ -18,6 +18,13 @@ import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .player_report import (
+    COMPARISON_SYSTEM_PROMPT,
+    MYTHIC_PLUS_COMPARISON_SYSTEM_PROMPT,
+    MYTHIC_PLUS_SINGLE_SYSTEM_PROMPT,
+    SINGLE_SYSTEM_PROMPT,
+)
+
 KINDS = ("single", "comparison")
 
 # 分析正文开头常带一段模型的前言再进 `#` 标题（实测 31 份里 30 份如此，
@@ -63,6 +70,23 @@ class PlayerReportStore:
             f"{_safe_report(report_code)}__{int(fight_id)}__{kind}__{slug}.json"
         )
 
+    def _signature(self) -> str:
+        """玩家报告对应的「提示词版本」。
+
+        整场复盘那边有 `AnalysisCache._signature()`，玩家报告一直没有 ——
+        改了玩家提示词之后，旧的玩家报告不会被标记过期，却仍是按旧提示词写的。
+        （本次就发生了：团本的两份玩家提示词都改过，磁盘上 12 份报告全部已过期
+        但没有任何标记。）四份提示词都哈希进去，改任一份都会让全部玩家报告失效。
+        """
+        payload = {
+            "single": SINGLE_SYSTEM_PROMPT,
+            "comparison": COMPARISON_SYSTEM_PROMPT,
+            "mythic_plus_single": MYTHIC_PLUS_SINGLE_SYSTEM_PROMPT,
+            "mythic_plus_comparison": MYTHIC_PLUS_COMPARISON_SYSTEM_PROMPT,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()[:16]
+
     def _prefix(self, report_code: str, fight_id: int) -> str:
         return f"{_safe_report(report_code)}__{int(fight_id)}__"
 
@@ -96,6 +120,7 @@ class PlayerReportStore:
             "player_ids": [int(i) for i in player_ids],
             "specs": [str(s) for s in specs],
             "model": model,
+            "signature": self._signature(),
             "created_at": time.time(),
             "analysis": analysis,
             "payload": dict(payload or {}),
@@ -126,7 +151,11 @@ class PlayerReportStore:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        # 老记录没有 signature 字段 → 一律视为过期（它们确实是按更早的提示词写的）
+        payload["stale"] = payload.get("signature") != self._signature()
+        return payload
 
     @staticmethod
     def _summary(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -139,6 +168,7 @@ class PlayerReportStore:
             "players": record.get("players") or [],
             "specs": record.get("specs") or [],
             "created_at": record.get("created_at"),
+            "stale": bool(record.get("stale")),
         }
 
     def list_for_fight(self, report_code: str, fight_id: int) -> list[dict[str, Any]]:

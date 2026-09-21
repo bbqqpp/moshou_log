@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .boss_guides import load_all_boss_guides
-from .prompt import SYSTEM_PROMPT
+from .prompt import MYTHIC_PLUS_SYSTEM_PROMPT, RAID_SYSTEM_PROMPT
+from .wow import load_affix_names
 
 
 class AnalysisCache:
@@ -18,10 +19,23 @@ class AnalysisCache:
         self.model = model
 
     def _signature(self) -> str:
+        # **两个提示词都哈希进去**。团本和大秘境各走一套提示词（见 prompt.py 的
+        # `system_prompt_for`），而 `get()` / `read_record()` / `list_all()` 都拿不到
+        # fight 上下文、分不清该用哪套 —— 与其给三个 API 都加参数，不如两份都哈希：
+        # 改任一份都会让全部缓存失效。
+        #
+        # 这也顺带保证了一件事：加入大秘境提示词这件事本身会改变签名，
+        # 于是**上一轮用团本提示词生成的大秘境报告会正确失效**。
         payload = {
             "model": self.model,
-            "system_prompt": SYSTEM_PROMPT,
+            "raid_prompt": RAID_SYSTEM_PROMPT,
+            "mythic_plus_prompt": MYTHIC_PLUS_SYSTEM_PROMPT,
             "boss_guides": load_all_boss_guides(),
+            # 词缀表是大秘境的「攻略库」对等物：`summary.keystone.affixes` 的中文名
+            # 由它解析，V1 历史缓存更是**只能**靠它。赛季更新后表变了，
+            # 旧报告里的词缀名就过期了 —— 不哈希进来的话它们不会被标 stale，
+            # 却还在把旧词缀名当权威结论讲。
+            "affix_names": load_affix_names(),
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()[:16]

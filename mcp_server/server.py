@@ -21,6 +21,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 from mcp.server.mcpserver import MCPServer  # noqa: E402
 
 from app.aggregation import (  # noqa: E402
+    COUNTED_ENTRY_KEYS,
     _build_actor_catalog,
     _entries,
     _number,
@@ -41,6 +42,7 @@ from app.player_compare import (  # noqa: E402
     resolve_player,
 )
 from app.wcl_data_store import WCLDataStore  # noqa: E402
+from app.wow import is_mythic_plus  # noqa: E402
 
 server = MCPServer(
     name="wcl-analyzer",
@@ -76,8 +78,14 @@ def fetch_fight(report_code: str, fight_id: int) -> str:
             "size": fight.get("size"),
             "kill": fight.get("kill"),
             "duration_seconds": round(duration_ms / 1000),
+            # 只数真正的战斗事件。`tables` 里还有 rankings / survivability /
+            # player_details 这几张按人一行的派生表，它们也是 {"entries": [...]}
+            # 形状但**不是事件**，混进来会让这个数字比实际多出好几倍人数。
+            # aggregation._total_entries 用的是同一份白名单。
             "event_count": sum(
-                len(_entries(payload)) for payload in (data.get("tables") or {}).values()
+                len(_entries(payload))
+                for key, payload in (data.get("tables") or {}).items()
+                if key in COUNTED_ENTRY_KEYS
             ),
         }
     )
@@ -97,7 +105,10 @@ def list_players(report_code: str, fight_id: int) -> str:
                 "spec_id": info.get("spec_id"),
             }
             for actor_id, info in catalog.items()
-            if info.get("name")
+            # 只列玩家角色 —— 目录里还有 BOSS / NPC / 宠物（它们的 class 解析不出
+            # 职业）。实测不筛的话 LLM 会被告知在场有 25 名"玩家"，其中两个
+            # spec 是 "Boss"
+            if info.get("name") and info.get("class")
         ),
         key=lambda row: str(row["spec"]),
     )
@@ -119,7 +130,13 @@ def query_data(
     data_type 可选：damage-done / healing / damage-taken / deaths / buffs / debuffs /
     casts / interrupts / dispels / summons / buff_debuff_events / cast_events /
     death_events / interrupt_events / dispel_events / resource_events /
-    spawn_events / combatant_info_events / fight。
+    spawn_events / combatant_info_events / fight / rankings / survivability /
+    player_details。
+
+    rankings 是每人的 parse 百分位（同装等区间内的水平，**灭团场次为空**）；
+    survivability 是 0-1 的生存分（相对同专精算）；player_details 含专精、装等
+    与爆发药水／治疗石使用次数。这三项是迁移到 WCL V2 之后才有的 —— 分析迁移前
+    拉下来的旧战斗会返回「这份缓存太旧」而不是空列表。
 
     player 可给名字（支持模糊匹配）；start_time / end_time 单位毫秒，
     小于战斗开始时间的输入会被当作「战斗相对时间」自动换算。limit 上限 1000。
@@ -194,13 +211,18 @@ def compare_players(
 
 
 @server.tool()
-async def deepseek_review(report_code: str, fight_id: int, player: str = "") -> str:
+def deepseek_review(report_code: str, fight_id: int, player: str = "") -> str:
     """跑完整的 DeepSeek 复盘（网页版应用的流程），返回一份中文 Markdown 报告。
 
     流程：拉取全量数据 → 聚合摘要 → 交给 DeepSeek，模型按需调用工具查询本地数据
-    （最多 6 轮）→ 输出整场复盘。单场分析约需 1-3 分钟，会消耗 DeepSeek token。
+    → 输出整场复盘。单场分析约需 1-3 分钟，会消耗 DeepSeek token。
 
     同一场战斗的分析结果会缓存；player 参数当前不参与分析范围，仅用于确认玩家在场。
+
+    **这是同步工具，不能改成 `async def`**：`load_fight` 在本地缓存未命中时会自己
+    调 `asyncio.run(...)` 去下载，而 `asyncio.run` 在已经运行的事件循环里必然抛
+    `RuntimeError`。MCP 会把同步工具派发到线程池，所以同步版本才是对的——
+    改成 async 会让「未缓存的战斗」这条路径彻底跑不通（实测确认）。
     """
     if not settings.deepseek_api_key:
         return "错误：backend/.env 里没有配置 DEEPSEEK_API_KEY"
@@ -220,20 +242,36 @@ async def deepseek_review(report_code: str, fight_id: int, player: str = "") -> 
         timeline_limit=settings.timeline_preview_limit,
         duration_ms=duration_ms,
         fight_start_ms=fight_start,
+        fight=fight,
     )
 
     from app.deepseek_agent import run_deepseek_tool_loop
 
     store = WCLDataStore(BACKEND_DIR / "storage" / "wcl_data")
-    report = await run_deepseek_tool_loop(store, report_code, fight_id, fight, summary)
+    report = asyncio.run(run_deepseek_tool_loop(store, report_code, fight_id, fight, summary))
     return report
 
 
 @server.tool()
 def boss_guide(report_code: str, fight_id: int) -> str:
-    """取这场战斗对应 BOSS 的本地攻略（阶段划分、机制、常见灭团点、检查清单）。"""
+    """取这场战斗对应 BOSS 的本地攻略（阶段划分、机制、常见灭团点、检查清单）。
+
+    **只适用于团本 BOSS 战。** 大秘境没有攻略库 —— 副本的 `encounterID`
+    是最终 BOSS 的 NPC id，拿它去匹配会得到一个语义完全不对的答案。
+    """
     data = load_fight(report_code, fight_id)
-    guide = find_boss_guide(data.get("fight") or {})
+    fight = data.get("fight") or {}
+
+    if is_mythic_plus(fight):
+        return (
+            f"这是一场大秘境（+{fight.get('keystoneLevel')} "
+            f"{fight.get('name') or '未知'}），不是团本 BOSS 战。\n"
+            "本地攻略库只覆盖团本 BOSS，没有副本的路线/小怪/词缀数据。\n"
+            "大秘境的分析请看 fetch_fight 返回的逐段拉怪与时间账，"
+            "或用 deepseek_review 跑一次大秘境复盘。"
+        )
+
+    guide = find_boss_guide(fight)
     if guide is None:
         return "这个 BOSS 还没有本地攻略数据（backend/storage/boss_guides/）"
     return _dumps(guide)

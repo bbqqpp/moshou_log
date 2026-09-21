@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from typing import Any
 
 CLASS_MAP = {
@@ -237,3 +240,59 @@ def localize_role(value: str) -> dict[str, Any]:
     spec_cn = _match_spec(class_key, text)
     label = f"{spec_cn}{class_cn}" if spec_cn else class_cn
     return {"class": class_cn, "spec": spec_cn, "label": label}
+
+
+def is_mythic_plus(fight: Any) -> bool:
+    """Whether a WCL fight is a Mythic+ dungeon run rather than a raid encounter.
+
+    `keystoneLevel` 只有大秘境才有（团本是 null），是最干净的判据 ——
+    比看 zone、看人数、看时长都可靠。
+
+    放在这个模块是因为它无依赖，`prompt.py` / `aggregation.py` / `deepseek_agent.py`
+    都要用它，而它们之间不该互相 import。
+    """
+    if not isinstance(fight, dict):
+        return False
+    return fight.get("keystoneLevel") is not None
+
+
+#: 词缀 id → 中文名的持久化缓存。
+#:
+#: 名字只有国服端点有（见 `wcl_v2.affix_names`），而 V1 时代的历史缓存里
+#: 只有词缀 **id**（`affixes: [10, 9, 147]`）。把取到的表落一份到磁盘，
+#: 历史缓存也能解析出中文名——聚合层只读文件，不发网络请求。
+AFFIX_CACHE_PATH = Path(__file__).resolve().parents[1] / "storage" / "affixes.json"
+
+
+def load_affix_names() -> dict[int, str]:
+    """读词缀中文名对照表。文件不存在或损坏时返回空字典。"""
+    try:
+        payload = json.loads(AFFIX_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    names: dict[int, str] = {}
+    for key, value in payload.items():
+        try:
+            names[int(key)] = str(value)
+        except (TypeError, ValueError):
+            continue
+    return names
+
+
+def save_affix_names(mapping: Mapping[int, str]) -> None:
+    """落盘词缀对照表。失败不影响主流程（只是下次还得重新取）。"""
+    if not mapping:
+        return
+    merged = load_affix_names()
+    merged.update(mapping)
+    try:
+        AFFIX_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        AFFIX_CACHE_PATH.write_text(
+            json.dumps({str(k): v for k, v in sorted(merged.items())},
+                       ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
